@@ -28,9 +28,9 @@ It is especially useful for developers or other users who want to **keep multipl
 ## 🎬 Showcase
 
 ### 🖼️ Screenshots
-| Home / Solar System View | Planet Navigation Example |
+| Program | Config example |
 |:--:|:--:|
-| ![Screenshot 1](developer-portfolio-website/public/images/myPortfolio1.png) | ![Screenshot 2](developer-portfolio-website/public/images/myPortfolio2.png) |
+| ![Screenshot 1](/Showcase/showcase1.png) | ![Screenshot 2](/Showcase/showcase2.png) |
 
 <!--
 ### 🎥 Demo
