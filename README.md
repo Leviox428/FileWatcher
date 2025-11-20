@@ -74,7 +74,7 @@ or
 
 ## 📚 What I Learned
 
-- Deep understanding of **FileSystemWatcher** and its quirks.  
+- Deep understanding of `FileSystemWatcher` and its quirks.  
 - Handling **concurrent file system events** safely using `ConcurrentDictionary`.  
 - Implementing **debouncing** and **retry logic** for real-time applications.  
 - Working with **configuration-driven design** to make apps flexible.  
