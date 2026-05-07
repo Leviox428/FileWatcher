@@ -1,5 +1,7 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Text.Json;
+using Renci.SshNet;
 
 class Program
 {
@@ -12,9 +14,27 @@ class Program
         public int DelayInSeconds { get; set; } = 1;
     }
 
+    class FtpConfig
+    {
+        public string Address { get; set; } = string.Empty;
+        public int Port { get; set; } = 22;
+        public string Name { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+
+    class FtpTarget
+    {
+        public string SourcePath { get; set; } = string.Empty;
+        public string DestinationPath { get; set; } = string.Empty;
+        public bool ZipFiles { get; set; } = false;
+        public string ZipExtension { get; set; } = ".zip";
+    }
+
     private static List<Config> _configs = [];
     private static readonly JsonSerializerOptions _jsonSerializerOptions = new() { WriteIndented = true };
     private static readonly string _configFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+    private static readonly string _ftpConfigFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ftpConfig.json");
+    private static readonly string _ftpTargetsFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ftpTargets.json");
     private static readonly ConcurrentDictionary<string, DateTime> _lastProcessed = new();
     private static readonly TimeSpan _debounceInterval = TimeSpan.FromMilliseconds(500);
     private static readonly List<FileSystemWatcher> _watchers = [];
@@ -52,8 +72,205 @@ class Program
             };
             _watchers.Add(watcher);
         }
-        Console.WriteLine("Press [enter] to exit.");
-        Console.ReadLine();
+        PrintHelp();
+        RunCmdLoop();
+    }
+
+    static void RunCmdLoop()
+    {
+        while (true)
+        {
+            string? input = Console.ReadLine();
+
+            if (input == null)
+                break;
+
+            input = input.Trim();
+
+            if (string.IsNullOrEmpty(input))
+                continue;
+
+            if (input.Equals("--release", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Write("Are you sure you want to release files to the SFTP server? [Y/N]: ");
+                string? confirm = Console.ReadLine()?.Trim();
+                if (confirm != null && confirm.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                {
+                    ExecuteRelease();
+                }
+                else
+                {
+                    Console.WriteLine("Release cancelled.");
+                }
+            }
+            else if (input.Equals("--help", StringComparison.OrdinalIgnoreCase))
+            {
+                PrintHelp();
+            }
+            else if (input.Equals("--quit", StringComparison.OrdinalIgnoreCase) || input.Equals("quit", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(0);
+                break;
+            }
+            else
+            {
+                Console.WriteLine($"Unknown command: '{input}'. Type --help for available commands.");
+            }
+        }
+    }
+    static void PrintHelp()
+    {
+        Console.WriteLine("Commands:");
+        Console.WriteLine("  --release : Upload files to the FTP server(ftpConfing.json) from ftpTargets.json");
+        Console.WriteLine("  --help    : Show help menu");
+        Console.WriteLine("  --quit    : Exit the application");
+    }
+
+    static void ExecuteRelease()
+    {
+        FtpConfig? ftpConfig = LoadFtpConfig();
+        if (ftpConfig == null) return;
+
+        List<FtpTarget>? targets = LoadFtpTargets();
+        if (targets == null) return;
+
+        Console.WriteLine($"Connecting to {ftpConfig.Address}:{ftpConfig.Port}...");
+
+        try
+        {
+            using var sftp = new SftpClient(ftpConfig.Address, ftpConfig.Port, ftpConfig.Name, ftpConfig.Password);
+            sftp.Connect();
+            Console.WriteLine("Connected.");
+
+            foreach (var target in targets)
+            {
+                UploadTarget(sftp, target);
+            }
+
+            sftp.Disconnect();
+            Console.WriteLine("Release complete. Disconnected.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"SFTP error: {ex.Message}");
+        }
+    }
+
+    static void UploadTarget(SftpClient sftp, FtpTarget target)
+    {
+        if (!Directory.Exists(target.SourcePath))
+        {
+            Console.WriteLine($"Source path does not exist: {target.SourcePath}");
+            return;
+        }
+
+        if (target.ZipFiles)
+        {
+            UploadAsZip(sftp, target);
+        }
+        else
+        {
+            UploadDirectory(sftp, target.SourcePath, target.DestinationPath);
+        }
+    }
+
+    static void UploadAsZip(SftpClient sftp, FtpTarget target)
+    {
+        string folderName = new DirectoryInfo(target.SourcePath).Name;
+        string zipFileName = folderName + target.ZipExtension;
+        string tempZipPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+        try
+        {
+            ZipFile.CreateFromDirectory(target.SourcePath, tempZipPath);
+            string remotePath = target.DestinationPath + "/" + zipFileName;
+            Console.WriteLine($"Uploading {zipFileName} to {remotePath}...");
+            using (var fileStream = File.OpenRead(tempZipPath))
+            {
+                sftp.UploadFile(fileStream, remotePath, true);
+            }
+            Console.WriteLine($"Uploaded: {zipFileName}");
+        }
+        finally
+        {
+            if (File.Exists(tempZipPath))
+                File.Delete(tempZipPath);
+        }
+    }
+
+    static void UploadDirectory(SftpClient sftp, string localDir, string remoteDir)
+    {
+
+        foreach (string filePath in Directory.GetFiles(localDir))
+        {
+            string fileName = Path.GetFileName(filePath);
+            string remotePath = remoteDir.TrimEnd('/') + "/" + fileName;
+            Console.WriteLine($"Uploading {fileName} to {remotePath}...");
+            using var fileStream = File.OpenRead(filePath);
+            sftp.UploadFile(fileStream, remotePath, true);
+            Console.WriteLine($"Uploaded: {fileName}");
+        }
+
+        foreach (string subDir in Directory.GetDirectories(localDir))
+        {
+            string dirName = Path.GetFileName(subDir);
+            string remoteSubDir = remoteDir.TrimEnd('/') + "/" + dirName;
+            UploadDirectory(sftp, subDir, remoteSubDir);
+        }
+    }
+
+
+    static FtpConfig? LoadFtpConfig()
+    {
+        if (!File.Exists(_ftpConfigFile))
+        {
+            var defaultConfig = new FtpConfig
+            {
+                Address = "sftp.example.com",
+                Port = 0,
+                Name = "username",
+                Password = "password"
+            };
+            File.WriteAllText(_ftpConfigFile, JsonSerializer.Serialize(defaultConfig, _jsonSerializerOptions));
+            Console.WriteLine("Created default ftpConfig.json — please edit it and try again.");
+            return null;
+        }
+
+        var config = JsonSerializer.Deserialize<FtpConfig>(File.ReadAllText(_ftpConfigFile));
+        if (config == null)
+        {
+            Console.WriteLine("Failed to parse ftpConfig.json.");
+            return null;
+        }
+        return config;
+    }
+
+    static List<FtpTarget>? LoadFtpTargets()
+    {
+        if (!File.Exists(_ftpTargetsFile))
+        {
+            var defaultTargets = new List<FtpTarget>
+            {
+                new()
+                {
+                    SourcePath = "C:\\Path\\To\\Dest",
+                    DestinationPath = "/destination",
+                    ZipFiles = false,
+                    ZipExtension = ".zip"
+                }
+            };
+            File.WriteAllText(_ftpTargetsFile, JsonSerializer.Serialize(defaultTargets, _jsonSerializerOptions));
+            Console.WriteLine("Created default ftpTargets.json — please edit it and try again.");
+            return null;
+        }
+
+        var targets = JsonSerializer.Deserialize<List<FtpTarget>>(File.ReadAllText(_ftpTargetsFile));
+        if (targets == null)
+        {
+            Console.WriteLine("Failed to parse ftpTargets.json.");
+            return null;
+        }
+        return targets;
     }
 
     static void LoadConfig()
@@ -64,23 +281,23 @@ class Program
 
             var defaultConfig = new List<Config>
             {
-                new() 
-                { 
-                    SourcePath = "C:\\Path\\To\\Source1", 
+                new()
+                {
+                    SourcePath = "C:\\Path\\To\\Source1",
                     DestinationPath = "C:\\Path\\To\\Dest1",
                     FileExtensions = new List<string> { ".txt", ".log" }, // example filters
                     RemoveBeforeCopy = false,
                     DelayInSeconds = 1
                 },
-                new() 
-                { 
-                    SourcePath = "C:\\Path\\To\\Source2", 
+                new()
+                {
+                    SourcePath = "C:\\Path\\To\\Source2",
                     DestinationPath = "C:\\Path\\To\\Dest2",
                     RemoveBeforeCopy = false,
                     DelayInSeconds = 1
                     //no filter all files are copied
-                },
 
+                },
             };
 
             string newJson = JsonSerializer.Serialize(defaultConfig, _jsonSerializerOptions);
@@ -97,12 +314,12 @@ class Program
             Environment.Exit(1);
         }
 
-        _configs = loaded;        
+        _configs = loaded;
     }
 
     private static void OnChanged(FileSystemEventArgs e, Config config)
     {
-        if (IsDebounced(e.FullPath, config)) return; 
+        if (IsDebounced(e.FullPath, config)) return;
         try
         {
             if (e.ChangeType is WatcherChangeTypes.Changed or WatcherChangeTypes.Created)
@@ -156,7 +373,7 @@ class Program
         if (config.FileExtensions != null && config.FileExtensions.Count > 0)
         {
             string fileExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
-            if (!config.FileExtensions.Contains(fileExtension))
+            if (!config.FileExtensions.Contains(fileExtension)) 
             {
                 return;
             }
@@ -189,7 +406,7 @@ class Program
                 // Delay to avoid copying file while still locked by another process
                 if (!wasDelayedOnce)
                 {
-                    Thread.Sleep(config.DelayInSeconds * 1000);
+                    Thread.Sleep(config.DelayInSeconds * 1000); 
                     wasDelayedOnce = true;
                 }
 
@@ -198,7 +415,6 @@ class Program
                 Console.WriteLine();
                 _lastProcessed[GetDebounceKey(sourceFilePath, config)] = DateTime.UtcNow;
                 return;
-
             }
             catch (IOException ioEx)
             {
@@ -235,5 +451,4 @@ class Program
     }
 
     private static string GetDebounceKey(string path, Config config) => $"{config.SourcePath}|{path}";
-
 }
