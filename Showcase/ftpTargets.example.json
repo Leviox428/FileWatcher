@@ -1,0 +1,13 @@
+[
+  {
+    "SourcePath": "C:\\MyProject\\deploy\\plugins",
+    "DestinationPath": "/home/container/plugins",
+    "ZipFiles": true,
+    "ZipExtension": ".cszip"
+  },
+  {
+    "SourcePath": "C:\\MyProject\\deploy\\config",
+    "DestinationPath": "/home/container/config",
+    "ZipFiles": false
+  }
+]

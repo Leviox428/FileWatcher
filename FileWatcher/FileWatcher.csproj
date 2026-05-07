@@ -7,4 +7,14 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="config.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="ftpConfig.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="ftpTargets.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
