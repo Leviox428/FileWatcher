@@ -1,7 +1,8 @@
+using Renci.SshNet;
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Text.Json;
-using Renci.SshNet;
+using static Org.BouncyCastle.Math.EC.ECCurve;
 
 class Program
 {
@@ -28,6 +29,8 @@ class Program
         public string DestinationPath { get; set; } = string.Empty;
         public bool ZipFiles { get; set; } = false;
         public string ZipExtension { get; set; } = ".zip";
+        public List<string>? FileExtensions { get; set; }
+
     }
 
     private static List<Config> _configs = [];
@@ -170,7 +173,7 @@ class Program
         }
         else
         {
-            UploadDirectory(sftp, target.SourcePath, target.DestinationPath);
+            UploadDirectory(sftp, target.SourcePath, target.DestinationPath, target.FileExtensions);
         }
     }
 
@@ -182,7 +185,18 @@ class Program
 
         try
         {
-            ZipFile.CreateFromDirectory(target.SourcePath, tempZipPath);
+            using (var zipStream = File.Create(tempZipPath))
+            using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create))
+            {
+                foreach (string filePath in Directory.GetFiles(target.SourcePath))
+                {
+                    if (FilterExtension(Path.GetFileName(filePath), target.FileExtensions))
+                    {
+                        zipArchive.CreateEntryFromFile(filePath, Path.GetFileName(filePath));
+                    }
+                }
+            }
+
             string remotePath = target.DestinationPath + "/" + zipFileName;
             Console.WriteLine($"Uploading {zipFileName} to {remotePath}...");
             using (var fileStream = File.OpenRead(tempZipPath))
@@ -197,25 +211,36 @@ class Program
                 File.Delete(tempZipPath);
         }
     }
-
-    static void UploadDirectory(SftpClient sftp, string localDir, string remoteDir)
+    static bool FilterExtension(string fileName, List<string>? fileExtensions)
     {
+        if (fileExtensions != null && fileExtensions.Count > 0)
+        {
+            string fileExtension = Path.GetExtension(fileName).ToLowerInvariant();
+            return fileExtensions.Contains(fileExtension);
+        }
+        return true;
+    }
 
+    static void UploadDirectory(SftpClient sftp, string localDir, string remoteDir, List<string>? fileExtensions)
+    {
         foreach (string filePath in Directory.GetFiles(localDir))
         {
             string fileName = Path.GetFileName(filePath);
+            if (!FilterExtension(fileName, fileExtensions)) continue;
+
             string remotePath = remoteDir.TrimEnd('/') + "/" + fileName;
             Console.WriteLine($"Uploading {fileName} to {remotePath}...");
             using var fileStream = File.OpenRead(filePath);
             sftp.UploadFile(fileStream, remotePath, true);
             Console.WriteLine($"Uploaded: {fileName}");
+
         }
 
         foreach (string subDir in Directory.GetDirectories(localDir))
         {
             string dirName = Path.GetFileName(subDir);
             string remoteSubDir = remoteDir.TrimEnd('/') + "/" + dirName;
-            UploadDirectory(sftp, subDir, remoteSubDir);
+            UploadDirectory(sftp, subDir, remoteSubDir, fileExtensions);
         }
     }
 
@@ -256,7 +281,9 @@ class Program
                     SourcePath = "C:\\Path\\To\\Dest",
                     DestinationPath = "/destination",
                     ZipFiles = false,
-                    ZipExtension = ".zip"
+                    ZipExtension = ".zip",
+                    FileExtensions = new List<string> { ".txt", ".log" }, // example filters
+
                 }
             };
             File.WriteAllText(_ftpTargetsFile, JsonSerializer.Serialize(defaultTargets, _jsonSerializerOptions));
@@ -373,7 +400,7 @@ class Program
         if (config.FileExtensions != null && config.FileExtensions.Count > 0)
         {
             string fileExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
-            if (!config.FileExtensions.Contains(fileExtension)) 
+            if (!config.FileExtensions.Contains(fileExtension))
             {
                 return;
             }
@@ -406,7 +433,7 @@ class Program
                 // Delay to avoid copying file while still locked by another process
                 if (!wasDelayedOnce)
                 {
-                    Thread.Sleep(config.DelayInSeconds * 1000); 
+                    Thread.Sleep(config.DelayInSeconds * 1000);
                     wasDelayedOnce = true;
                 }
 
