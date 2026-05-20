@@ -2,7 +2,6 @@ using Renci.SshNet;
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Text.Json;
-using static Org.BouncyCastle.Math.EC.ECCurve;
 
 class Program
 {
@@ -13,6 +12,7 @@ class Program
         public List<string>? FileExtensions { get; set; }
         public bool RemoveBeforeCopy { get; set; } = false;
         public int DelayInSeconds { get; set; } = 1;
+        public bool UseRelativePath { get; set; } = false;
     }
 
     class FtpConfig
@@ -30,14 +30,15 @@ class Program
         public bool ZipFiles { get; set; } = false;
         public string ZipExtension { get; set; } = ".zip";
         public List<string>? FileExtensions { get; set; }
-
+        public bool UseRelativePath { get; set; } = false;
     }
 
     private static List<Config> _configs = [];
     private static readonly JsonSerializerOptions _jsonSerializerOptions = new() { WriteIndented = true };
-    private static readonly string _configFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-    private static readonly string _ftpConfigFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ftpConfig.json");
-    private static readonly string _ftpTargetsFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ftpTargets.json");
+    private static readonly string _baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+    private static readonly string _configFile = Path.Combine(_baseDirectory, "config.json");
+    private static readonly string _ftpConfigFile = Path.Combine(_baseDirectory, "ftpConfig.json");
+    private static readonly string _ftpTargetsFile = Path.Combine(_baseDirectory, "ftpTargets.json");
     private static readonly ConcurrentDictionary<string, DateTime> _lastProcessed = new();
     private static readonly TimeSpan _debounceInterval = TimeSpan.FromMilliseconds(500);
     private static readonly List<FileSystemWatcher> _watchers = [];
@@ -278,12 +279,12 @@ class Program
             {
                 new()
                 {
-                    SourcePath = "C:\\Path\\To\\Dest",
+                    SourcePath = "C:\\Path\\To\\Source",
                     DestinationPath = "/destination",
                     ZipFiles = false,
                     ZipExtension = ".zip",
                     FileExtensions = new List<string> { ".txt", ".log" }, // example filters
-
+                    UseRelativePath = false
                 }
             };
             File.WriteAllText(_ftpTargetsFile, JsonSerializer.Serialize(defaultTargets, _jsonSerializerOptions));
@@ -297,6 +298,15 @@ class Program
             Console.WriteLine("Failed to parse ftpTargets.json.");
             return null;
         }
+
+        foreach (var target in targets)
+        {
+            if (target.UseRelativePath)
+            {
+                target.SourcePath = Path.Combine(_baseDirectory, target.SourcePath);
+            }
+        }
+
         return targets;
     }
 
@@ -314,14 +324,16 @@ class Program
                     DestinationPath = "C:\\Path\\To\\Dest1",
                     FileExtensions = new List<string> { ".txt", ".log" }, // example filters
                     RemoveBeforeCopy = false,
-                    DelayInSeconds = 1
+                    DelayInSeconds = 1,
+                    UseRelativePath = false
                 },
                 new()
                 {
-                    SourcePath = "C:\\Path\\To\\Source2",
-                    DestinationPath = "C:\\Path\\To\\Dest2",
+                    SourcePath = "relative\\source2",
+                    DestinationPath = "relative\\dest2",
                     RemoveBeforeCopy = false,
-                    DelayInSeconds = 1
+                    DelayInSeconds = 1,
+                    UseRelativePath = true
                     //no filter all files are copied
 
                 },
@@ -339,6 +351,15 @@ class Program
         {
             Console.WriteLine("Failed to load config.");
             Environment.Exit(1);
+        }
+
+        foreach (var config in loaded)
+        {
+            if (config.UseRelativePath)
+            {
+                config.SourcePath = Path.Combine(_baseDirectory, config.SourcePath);
+                config.DestinationPath = Path.Combine(_baseDirectory, config.DestinationPath);
+            }
         }
 
         _configs = loaded;
